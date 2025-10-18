@@ -1,15 +1,33 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from pathlib import Path
 import json
 import uuid
 import os
+import sys
+from contextlib import asynccontextmanager
 from database_service import db_service
 
-app = FastAPI(title="SSA Backend Admin API", version="1.0.0")
+# Add backend directory to path for imports
+sys.path.append(os.path.join(os.path.dirname(__file__), 'backend'))
+
+# Import backend routes
+from backend.routes.reservations import router as reservations_router
+from backend.routes.event_ticket import router as event_ticket_router
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize database connection on startup and cleanup on shutdown"""
+    # Startup
+    await db_service.connect()
+    yield
+    # Shutdown
+    await db_service.disconnect()
+
+app = FastAPI(title="SSA Backend Admin API", version="1.0.0", lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
@@ -26,6 +44,10 @@ Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
 # Mount static files to serve uploaded images
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+# Include backend routers
+app.include_router(reservations_router)
+app.include_router(event_ticket_router)
 
 # Valid categories for places
 VALID_CATEGORIES = ["REFINED_SIDE", "FUN_SIDE", "SPORT_SPHERE", "CITY_TREASURES"]
@@ -57,7 +79,8 @@ class Place(BaseModel):
     events: List[Event] = Field(description="List of events at the place")
     image_path: str = Field(description="Path to the image file for the place")
     
-    @validator('categories')
+    @field_validator('categories')
+    @classmethod
     def validate_categories(cls, v):
         if not v:
             raise ValueError('Categories list cannot be empty')
@@ -83,7 +106,8 @@ class UpdatePlace(BaseModel):
     events: Optional[List[Event]] = Field(description="List of events at the place")
     image_path: Optional[str] = Field(description="Path to the image file for the place")
     
-    @validator('categories')
+    @field_validator('categories')
+    @classmethod
     def validate_categories(cls, v):
         if v is not None:
             if not v:
@@ -94,20 +118,51 @@ class UpdatePlace(BaseModel):
         return v
     
 
-# Startup and shutdown events
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database connection on startup"""
-    await db_service.connect()
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Close database connection on shutdown"""
-    await db_service.disconnect()
+# Database connection is now handled by the lifespan context manager
 
 @app.get("/")
 def read_root():
-    return {"message": "SSA Backend Admin API", "docs": "/docs"}
+    return {
+        "message": "SSA Backend Admin API", 
+        "docs": "/docs",
+        "description": "API for SSA cultural reservation system - places, events, and reservations",
+        "endpoints": {
+            "admin": {
+                "GET /places": "Get all places",
+                "POST /new_place": "Create a new place",
+                "GET /places/{place_id}": "Get place by ID",
+                "PUT /edit_place/{place_id}": "Update place",
+                "DELETE /delete_place/{place_id}": "Delete place",
+                "POST /upload-image": "Upload image file",
+                "GET /categories": "Get valid categories"
+            },
+            "events": {
+                "POST /places/{place_id}/events": "Create event for place",
+                "GET /places/{place_id}/events": "Get events for place",
+                "GET /places/{place_id}/events/{event_id}": "Get specific event",
+                "PUT /places/{place_id}/events/{event_id}": "Update event",
+                "DELETE /places/{place_id}/events/{event_id}": "Delete event"
+            },
+            "reservations": {
+                "POST /reservations/start": "Start new reservation",
+                "GET /reservations/{session_id}/status": "Check reservation status",
+                "DELETE /reservations/{session_id}": "Delete reservation session",
+                "GET /reservations/": "Get all active sessions"
+            },
+            "event_tickets": {
+                "POST /event/start": "Start event ticket booking",
+                "GET /event/{session_id}/status": "Check booking status",
+                "GET /event/": "Get all booking sessions"
+            }
+        }
+    }
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint
+    """
+    return {"status": "healthy", "message": "SSA Backend Admin API is running"}
 
 @app.get("/categories")
 def get_valid_categories():
