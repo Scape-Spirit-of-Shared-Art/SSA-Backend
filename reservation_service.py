@@ -4,8 +4,7 @@ import uuid
 from browser_use import Agent, Browser, ChatAnthropic, Tools
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional
-from models import PersonalInfo, OrderComplete, AgentStatus, ReservationSession
-import json
+from models import OrderComplete, AgentStatus, ReservationSession
 
 load_dotenv()
 
@@ -45,53 +44,18 @@ class ReservationService:
         
         await self.initialize_browser()
         
-        tools = self.create_tools(session_id)
-        
         task = self.create_task(user_prompt)
 
         agent = Agent(
             task=task,
             browser=self.browser,
             llm=self.llm,
-            tools=tools,
             max_actions_per_step=10
         )
         
         asyncio.create_task(self.run_agent(session_id, agent))
         
         return session_id
-    
-    def create_tools(self, session_id: str):
-        """Create tools for agent"""
-        
-        tools = Tools()
-        
-        @tools.action(description='Save collected personal info to file')
-        def save_personal_info(info: PersonalInfo) -> str:
-            session = self.sessions[session_id]
-            session.personal_data = info.model_dump()
-            session.updated_at = time.time()
-            
-            with open(f'personal_info_{session_id}.json', 'w') as f:
-                json.dump(info.model_dump(), f, indent=2)
-            return f'Personal information saved securely'
-
-        @tools.action('Ask the human for required information that is missing.')
-        def collect_personal_info(required_fields: list[str]) -> PersonalInfo:
-            """Collect personal info through backend API"""
-            session = self.sessions[session_id]
-            
-            session.status = AgentStatus.WAITING_FOR_INPUT
-            session.required_fields = required_fields
-            session.waiting_for_input = True
-            session.updated_at = time.time()
-            
-            while session.waiting_for_input:
-                time.sleep(0.1)
-
-            return PersonalInfo(**session.personal_data)
-
-        return tools
 
     def create_task(self, user_prompt: str) -> str:
         """Create the agent task"""
@@ -105,25 +69,26 @@ class ReservationService:
             3. Find the tickets' section
             4. Buy the the number of tickets (it will be specified by the user)
             5. Choose the requested tickets
-            6. **IMPORTANT**: When the website requests personal data (email, first name, last name, phone number, password, etc.) 
-               that is NOT provided in the initial user prompt, you MUST use the 'collect_personal_info' tool to gather this information.
-               DO NOT proceed without collecting the required information. DO NOT make up information.
+            6. **IMPORTANT**: When you reach a form that requests personal data (email, first name, last name, phone number, password, etc.), 
+               you must STOP the automation completely and leave the browser open for the user to complete manually.
                
-               How to use collect_personal_info:
-               - Identify which fields the form requires (e.g., first_name, last_name, email, phone, password, etc.)
-               - Call collect_personal_info with a list of the required fields
-               - Example: collect_personal_info(['first_name', 'last_name', 'email', 'phone', 'password'])
-               - The tool will prompt the user for each field in the correct format and return a PersonalInfo object
-               - Use the returned information to fill out the form fields
+               Instructions for personal data forms:
+               - Navigate to the personal information form but DO NOT fill any fields automatically
+               - DO NOT use any tools to collect or input personal information
+               - DO NOT make up any personal information
+               - STOP all automation at this point
+               - Leave the browser window open and visible for the user
+               - Inform the user that they need to complete the personal information form manually
+               - Wait indefinitely until the user manually completes the form and continues the process
                
-            7. After collecting all required information using collect_personal_info, complete the form and proceed with the order
-            8. Continue until you reach the payment page, then let the user handle the payment
+            7. After the user has manually filled the personal information and submitted the form, the control will be in the user's hands
+            as he will continue in order to reach the payment page. Then, he will proceed to make the payment so leave the browser open.
             
             User's request: {user_prompt}
             
-            **CRITICAL**: Whenever you encounter a form field that requires information not in the user's original prompt, 
-            you MUST call the collect_personal_info tool with the list of required fields. Do not stop or wait - actively use the tool to get the information you need.
-            The task is only complete when you reach the payment page.
+            **CRITICAL**: When you encounter a personal information form, STOP automation immediately and leave the browser open. 
+            DO NOT use any tools to collect personal information. Let the user complete the form manually in the browser.
+            The task is only complete after the user makes the payment so leave the browser open.
             
             Do not close the browser until the payment is completed. Wait for the user to introduce his payment details.
         """
@@ -148,19 +113,6 @@ class ReservationService:
     def get_session_status(self, session_id: str) -> Optional[ReservationSession]:
         """Get session status"""
         return self.sessions.get(session_id)
-    
-    def provide_personal_info(self, session_id: str, personal_data: Dict[str, Any]) -> bool:
-        """Provide personal information to continue agent"""
-        if session_id not in self.sessions:
-            return False
-        
-        session = self.sessions[session_id]
-        session.personal_data = personal_data
-        session.waiting_for_input = False
-        session.status = AgentStatus.WORKING
-        session.updated_at = time.time()
-        
-        return True
     
     def cleanup_session(self, session_id: str):
         """Clean up session"""
