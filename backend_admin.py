@@ -28,7 +28,7 @@ Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Valid categories for places
-VALID_CATEGORIES = ["REFINED_SIDE", "FUN_SIDE", "SPORT_SPHERE", "CITY_TREASURES"]
+VALID_CATEGORIES = ["REFINED_SIDE", "FUN_SIDE", "SPORT_SPHERE", "CITY_TREASURES", "CITY_STAYS", "TASTE_DISTRICT", "HEALTH_AND_BEAUTY"]
 
 class Event(BaseModel):
     name: str = Field(description="Name of the event")
@@ -224,7 +224,56 @@ async def get_place_by_id(place_id: int):
         place = await db_service.get_place_by_id(place_id)
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
-        return {"place": place}
+        
+        # Convert events for this place
+        converted_events = []
+        if place.events:
+            for event in place.events:
+                # Parse images_paths
+                try:
+                    if event.imagesPaths:
+                        parsed_images = json.loads(event.imagesPaths)
+                    else:
+                        parsed_images = []
+                except Exception as e:
+                    print(f"DEBUG: Event {event.id} JSON parse error: {e}")
+                    parsed_images = []
+                
+                converted_event = {
+                    'id': str(event.id),
+                    'name': event.name,
+                    'bio': event.bio,
+                    'max_participants': event.maxParticipants,
+                    'website': event.website,
+                    'email': event.email,
+                    'phone_number': event.phoneNumber,
+                    'address': event.address,
+                    'program': json.loads(event.program) if event.program else [],
+                    'images_paths': parsed_images,
+                    'date': event.date
+                }
+                converted_events.append(converted_event)
+        
+        # Create converted place
+        converted_place = {
+            'id': place.id,
+            'name': place.name,
+            'bio': place.bio,
+            'website': place.website,
+            'email': place.email,
+            'phone_number': place.phoneNumber,
+            'address': place.address,
+            'floormaps': json.loads(place.floormaps) if place.floormaps else {},
+            'categories': json.loads(place.categories) if place.categories else [],
+            'password': place.password,
+            'monday_friday': place.mondayFriday,
+            'saturday': place.saturday,
+            'sunday': place.sunday,
+            'image_path': place.imagePath,
+            'events': converted_events
+        }
+        
+        return {"place": converted_place}
     except HTTPException:
         raise
     except Exception as e:
