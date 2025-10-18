@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import Optional, List
 from pathlib import Path
 import json
@@ -9,6 +9,9 @@ app = FastAPI(title="SSA Backend Admin API", version="1.0.0")
 
 # IMAGE_DIR = "/uploads/images/"
 # Path(IMAGE_DIR).mkdir(parents=True, exist_ok=True)
+
+# Valid categories for places
+VALID_CATEGORIES = ["REFINED_SIDE", "FUN_SIDE", "SPORT_SPHERE", "CITY_TREASURES"]
 
 class Event(BaseModel):
     name: str = Field(description="Name of the event")
@@ -29,12 +32,22 @@ class Place(BaseModel):
     phone_number: str = Field(description="Phone number for contact")
     address: str = Field(description="Address of the place")
     floormaps: dict = Field(description="JSON object containing floor map data")
+    categories: List[str] = Field(description="List of categories for the place")
     password: str = Field(description="Password for authentication")
     monday_friday: str = Field(description="Schedule from Monday to Friday")
     saturday: str = Field(description="Schedule for Saturday")
     sunday: str = Field(description="Schedule for Sunday")
     events: List[Event] = Field(description="List of events at the place")
     image_path: str = Field(description="Path to the image file for the place")
+    
+    @validator('categories')
+    def validate_categories(cls, v):
+        if not v:
+            raise ValueError('Categories list cannot be empty')
+        for category in v:
+            if category not in VALID_CATEGORIES:
+                raise ValueError(f'Invalid category: {category}. Valid categories are: {VALID_CATEGORIES}')
+        return v
 
 
 class UpdatePlace(BaseModel):
@@ -45,12 +58,23 @@ class UpdatePlace(BaseModel):
     phone_number: Optional[str] = Field(description="Phone number for contact")
     address: Optional[str] = Field(description="Address of the place")
     floormaps: Optional[dict] = Field(description="JSON object containing floor map data")
+    categories: Optional[List[str]] = Field(description="List of categories for the place")
     password: Optional[str] = Field(description="Password for authentication")
     monday_friday: Optional[str] = Field(description="Schedule from Monday to Friday")
     saturday: Optional[str] = Field(description="Schedule for Saturday")
     sunday: Optional[str] = Field(description="Schedule for Sunday")
     events: Optional[List[Event]] = Field(description="List of events at the place")
     image_path: Optional[str] = Field(description="Path to the image file for the place")
+    
+    @validator('categories')
+    def validate_categories(cls, v):
+        if v is not None:
+            if not v:
+                raise ValueError('Categories list cannot be empty')
+            for category in v:
+                if category not in VALID_CATEGORIES:
+                    raise ValueError(f'Invalid category: {category}. Valid categories are: {VALID_CATEGORIES}')
+        return v
     
 
 # Startup and shutdown events
@@ -67,6 +91,11 @@ async def shutdown_event():
 @app.get("/")
 def read_root():
     return {"message": "SSA Backend Admin API", "docs": "/docs"}
+
+@app.get("/categories")
+def get_valid_categories():
+    """Get list of valid categories for places"""
+    return {"categories": VALID_CATEGORIES}
 
 @app.post("/new_place")
 async def create_place(place: Place):

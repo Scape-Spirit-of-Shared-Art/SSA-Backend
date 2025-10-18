@@ -40,6 +40,7 @@ class DatabaseService:
             'phoneNumber': place_data.get('phone_number'),
             'address': place_data.get('address'),
             'floormaps': json.dumps(place_data.get('floormaps', {})),
+            'categories': json.dumps(place_data.get('categories', [])),
             'password': place_data.get('password'),
             'mondayFriday': place_data.get('monday_friday'),
             'saturday': place_data.get('saturday'),
@@ -102,6 +103,9 @@ class DatabaseService:
                 # Convert floormaps to JSON string if it's a dict
                 if key == 'floormaps' and isinstance(value, dict):
                     update_dict['floormaps'] = json.dumps(value)
+                # Convert categories to JSON string if it's a list
+                elif key == 'categories' and isinstance(value, list):
+                    update_dict['categories'] = json.dumps(value)
                 else:
                     update_dict[key] = value
         

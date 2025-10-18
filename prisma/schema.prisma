@@ -38,6 +38,7 @@ model Place {
   phoneNumber    String   @map("phone_number")
   address        String
   floormaps      String   // JSON string for floor map data
+  categories     String   // JSON string for categories array
   password       String
   mondayFriday   String   @map("monday_friday")
   saturday       String
