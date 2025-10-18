@@ -23,9 +23,9 @@ router = APIRouter(prefix="/reservations", tags=["reservations"])
 @router.post("/start", response_model=StartReservationResponse)
 async def start_reservation(request: StartReservationRequest):
     """
-    Începe o nouă rezervare
+    Starts a new reservation
     
-    - **user_prompt**: Cererea utilizatorului (ex: "Vreau 2 bilete la Teatrul Național pentru Hamlet")
+    - **user_prompt**: User's request
     """
     try:
         session_id = await reservation_service.start_reservation(request.user_prompt)
@@ -33,24 +33,24 @@ async def start_reservation(request: StartReservationRequest):
         return StartReservationResponse(
             session_id=session_id,
             status=AgentStatus.WORKING.value,
-            message="Procesul de rezervare a început cu succes"
+            message="The reservation process started"
         )
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Eroare la pornirea rezervării: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error at the reservation starting: {str(e)}")
 
 
 @router.get("/{session_id}/status")
 async def get_reservation_status(session_id: str):
     """
-    Verifică statusul unei rezervări
+    Verifies the status of a reservation
     
-    - **session_id**: ID-ul sesiunii de rezervare
+    - **session_id**: Reservation session ID
     """
     session = reservation_service.get_session_status(session_id)
     
     if not session:
-        raise HTTPException(status_code=404, detail="Sesiunea nu a fost găsită")
+        raise HTTPException(status_code=404, detail="The session wasn't found")
     
     return {
         "session_id": session.session_id,
@@ -66,19 +66,19 @@ async def get_reservation_status(session_id: str):
 @router.delete("/{session_id}")
 async def cleanup_session(session_id: str):
     """
-    Șterge o sesiune de rezervare
+    Deletes reservation's session
     
-    - **session_id**: ID-ul sesiunii de rezervare
+    - **session_id**: Reservation session ID
     """
     reservation_service.cleanup_session(session_id)
     
-    return {"message": f"Sesiunea {session_id} a fost ștearsă cu succes"}
+    return {"message": f"The session {session_id} was deleted successfully"}
 
 
 @router.get("/")
 async def get_all_sessions():
     """
-    Obține toate sesiunile active (pentru debug/monitoring)
+    Obtains all active sessions
     """
     sessions = {}
     for session_id, session in reservation_service.sessions.items():

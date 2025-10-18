@@ -17,6 +17,7 @@ class EventTicketService:
             temperature=0.0,
             timeout=200
         )
+
     async def initialize_browser(self):
         """Initialize browser"""
         if self.browser is None:

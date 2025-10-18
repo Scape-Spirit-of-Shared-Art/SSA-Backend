@@ -7,6 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.middleware.cors import add_cors_middleware
 from backend.routes.reservations import router as reservations_router
+from backend.routes.event_ticket import router as event_ticket_router
 
 app = FastAPI(
     title="Reservation Agent API",
@@ -19,6 +20,7 @@ app = FastAPI(
 add_cors_middleware(app)
 
 app.include_router(reservations_router)
+app.include_router(event_ticket_router)
 
 @app.get("/")
 async def root():
@@ -33,7 +35,10 @@ async def root():
             "POST /reservations/start": "Începe o rezervare nouă",
             "GET /reservations/{session_id}/status": "Verifică statusul",
             "POST /reservations/{session_id}/personal-info": "Trimite date personale",
-            "DELETE /reservations/{session_id}": "Șterge sesiunea"
+            "DELETE /reservations/{session_id}": "Șterge sesiunea",
+            "POST /event/start": "Incepe o rezervare pentru eveniment",
+            "GET /event/{session_id}/status": "Verifica statusul",
+            "GET /event/": "Obtine toate evenimentele",
         }
     }
 
