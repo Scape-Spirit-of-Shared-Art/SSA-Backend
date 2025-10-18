@@ -14,7 +14,7 @@ app = FastAPI(title="SSA Backend Admin API", version="1.0.0")
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200", "http://127.0.0.1:4200"],  # Angular dev server
+    allow_origins=["http://localhost:4200", "http://127.0.0.1:4200", "http://localhost:4201", "http://127.0.0.1:4201"],  # Angular dev server
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -153,7 +153,67 @@ async def get_list_of_places():
     """Get all places"""
     try:
         places = await db_service.get_all_places()
-        return {"places": places}
+        print(f"DEBUG: Found {len(places)} places")
+        
+        # Convert places to match frontend expectations
+        converted_places = []
+        for place in places:
+            print(f"DEBUG: Place {place.id} has {len(place.events) if place.events else 0} events")
+            
+            # Convert events for this place
+            converted_events = []
+            if place.events:
+                for event in place.events:
+                    print(f"DEBUG: Event {event.id} imagesPaths raw: {event.imagesPaths}")
+                    
+                    # Parse images_paths
+                    try:
+                        if event.imagesPaths:
+                            parsed_images = json.loads(event.imagesPaths)
+                            print(f"DEBUG: Event {event.id} parsed images: {parsed_images}")
+                        else:
+                            parsed_images = []
+                            print(f"DEBUG: Event {event.id} no imagesPaths, using empty array")
+                    except Exception as e:
+                        print(f"DEBUG: Event {event.id} JSON parse error: {e}")
+                        parsed_images = []
+                    
+                    converted_event = {
+                        'id': str(event.id),
+                        'name': event.name,
+                        'bio': event.bio,
+                        'max_participants': event.maxParticipants,
+                        'website': event.website,
+                        'email': event.email,
+                        'phone_number': event.phoneNumber,
+                        'address': event.address,
+                        'program': json.loads(event.program) if event.program else [],
+                        'images_paths': parsed_images,
+                        'date': event.date
+                    }
+                    converted_events.append(converted_event)
+            
+            # Create converted place
+            converted_place = {
+                'id': place.id,
+                'name': place.name,
+                'bio': place.bio,
+                'website': place.website,
+                'email': place.email,
+                'phone_number': place.phoneNumber,
+                'address': place.address,
+                'floormaps': json.loads(place.floormaps) if place.floormaps else {},
+                'categories': json.loads(place.categories) if place.categories else [],
+                'password': place.password,
+                'monday_friday': place.mondayFriday,
+                'saturday': place.saturday,
+                'sunday': place.sunday,
+                'image_path': place.imagePath,
+                'events': converted_events
+            }
+            converted_places.append(converted_place)
+        
+        return {"places": converted_places}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching places: {str(e)}")
 
@@ -298,6 +358,21 @@ async def get_place_events(place_id: int):
         events = []
         if hasattr(place, 'events') and place.events:
             for event in place.events:
+                print(f"DEBUG: Event {event.id} - imagesPaths raw: {event.imagesPaths}")
+                print(f"DEBUG: Event {event.id} - imagesPaths type: {type(event.imagesPaths)}")
+                
+                # Try to parse images_paths
+                try:
+                    if event.imagesPaths:
+                        parsed_images = json.loads(event.imagesPaths)
+                        print(f"DEBUG: Event {event.id} - parsed images successfully: {parsed_images}")
+                    else:
+                        parsed_images = []
+                        print(f"DEBUG: Event {event.id} - no imagesPaths, using empty array")
+                except Exception as e:
+                    print(f"DEBUG: Event {event.id} - JSON parse error: {e}")
+                    parsed_images = []
+                
                 converted_event = {
                     'id': str(event.id),
                     'name': event.name,
@@ -308,9 +383,10 @@ async def get_place_events(place_id: int):
                     'phone_number': event.phoneNumber,
                     'address': event.address,
                     'program': json.loads(event.program) if event.program else [],
-                    'images_paths': json.loads(event.imagesPaths) if event.imagesPaths else [],
+                    'images_paths': parsed_images,
                     'date': event.date
                 }
+                print(f"DEBUG: Event {event.id} - final converted images_paths: {converted_event['images_paths']}")
                 events.append(converted_event)
         
         return {"events": events}
