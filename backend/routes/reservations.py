@@ -78,8 +78,7 @@ async def provide_personal_info(session_id: str, request: PersonalInfo):
     - **request**: Informațiile personale (nume, email, telefon, etc.)
     """
     
-    # Convertesc request-ul în dicționar, eliminând valorile None
-    personal_data = {k: v for k, v in request.dict().items() if v is not None}
+    personal_data = {k: v for k, v in request.model_dump().items() if v is not None}
     
     if not personal_data:
         raise HTTPException(status_code=400, detail="Nu au fost furnizate informații personale")
@@ -126,3 +125,4 @@ async def get_all_sessions():
         "total_sessions": len(sessions),
         "sessions": sessions
     }
+
