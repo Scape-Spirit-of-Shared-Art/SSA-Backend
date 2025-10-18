@@ -96,23 +96,28 @@ class DatabaseService:
         # Handle events separately if they exist
         events_data = update_data.pop('events', None)
         
-        # Prepare update data
-        update_dict = {}
+        # Map field names to match database schema (same as create_place)
+        mapped_data = {}
         for key, value in update_data.items():
             if value is not None:
-                # Convert floormaps to JSON string if it's a dict
-                if key == 'floormaps' and isinstance(value, dict):
-                    update_dict['floormaps'] = json.dumps(value)
-                # Convert categories to JSON string if it's a list
+                # Map field names to database schema
+                if key == 'phone_number':
+                    mapped_data['phoneNumber'] = value
+                elif key == 'monday_friday':
+                    mapped_data['mondayFriday'] = value
+                elif key == 'image_path':
+                    mapped_data['imagePath'] = value
+                elif key == 'floormaps' and isinstance(value, dict):
+                    mapped_data['floormaps'] = json.dumps(value)
                 elif key == 'categories' and isinstance(value, list):
-                    update_dict['categories'] = json.dumps(value)
+                    mapped_data['categories'] = json.dumps(value)
                 else:
-                    update_dict[key] = value
+                    mapped_data[key] = value
         
         # Update the place
         place = await prisma.place.update(
             where={'id': place_id},
-            data=update_dict,
+            data=mapped_data,
             include={
                 'events': True
             }
@@ -127,10 +132,17 @@ class DatabaseService:
                 await prisma.event.create_many(
                     data=[
                         {
-                            **event,
-                            'placeId': place_id,
+                            'name': event.get('name'),
+                            'bio': event.get('bio'),
+                            'maxParticipants': event.get('max_participants'),
+                            'website': event.get('website'),
+                            'email': event.get('email'),
+                            'phoneNumber': event.get('phone_number'),
+                            'address': event.get('address'),
                             'program': json.dumps(event.get('program', [])),
-                            'imagesPaths': json.dumps(event.get('images_paths', []))
+                            'imagesPaths': json.dumps(event.get('images_paths', [])),
+                            'date': event.get('date'),
+                            'placeId': place_id
                         }
                         for event in events_data
                     ]
