@@ -233,31 +233,54 @@ async def create_event(place_id: int, event: CreateEvent):
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
         
-        # Add the new event to the place's events list
+        # Create the event using the database service
         event_dict = event.model_dump()
-        event_dict["id"] = str(uuid.uuid4())  # Generate unique ID
         
-        # Convert field names to match database schema (camelCase)
-        converted_event = {}
-        for key, value in event_dict.items():
-            if key == 'max_participants':
-                converted_event['maxParticipants'] = value
-            elif key == 'phone_number':
-                converted_event['phoneNumber'] = value
-            elif key == 'images_paths':
-                converted_event['imagesPaths'] = value
-            else:
-                converted_event[key] = value
+        # Create the event in the database
+        from prisma import Prisma
+        prisma = Prisma()
+        await prisma.connect()
         
-        if not hasattr(place, 'events') or place.events is None:
-            place.events = []
-        
-        place.events.append(converted_event)
-        
-        # Update the place with the new event
-        updated_place = await db_service.update_place(place_id, {"events": place.events})
-        
-        return {"status": "success", "event": converted_event, "place": updated_place}
+        try:
+            created_event = await prisma.event.create(
+                data={
+                    'name': event_dict['name'],
+                    'bio': event_dict['bio'],
+                    'maxParticipants': event_dict['max_participants'],
+                    'website': event_dict['website'],
+                    'email': event_dict['email'],
+                    'phoneNumber': event_dict['phone_number'],
+                    'address': event_dict['address'],
+                    'program': json.dumps(event_dict['program']),
+                    'imagesPaths': json.dumps(event_dict['images_paths']),
+                    'date': event_dict.get('date'),
+                    'placeId': place_id
+                }
+            )
+            
+            # Convert the created event to match frontend expectations
+            converted_event = {
+                'id': str(created_event.id),
+                'name': created_event.name,
+                'bio': created_event.bio,
+                'max_participants': created_event.maxParticipants,
+                'website': created_event.website,
+                'email': created_event.email,
+                'phone_number': created_event.phoneNumber,
+                'address': created_event.address,
+                'program': json.loads(created_event.program) if created_event.program else [],
+                'images_paths': json.loads(created_event.imagesPaths) if created_event.imagesPaths else [],
+                'date': created_event.date
+            }
+            
+            # Get updated place with events
+            updated_place = await db_service.get_place_by_id(place_id)
+            
+            return {"status": "success", "event": converted_event, "place": updated_place}
+            
+        finally:
+            await prisma.disconnect()
+            
     except HTTPException:
         raise
     except Exception as e:
@@ -271,7 +294,25 @@ async def get_place_events(place_id: int):
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
         
-        events = getattr(place, 'events', []) or []
+        # Convert events to match frontend expectations
+        events = []
+        if hasattr(place, 'events') and place.events:
+            for event in place.events:
+                converted_event = {
+                    'id': str(event.id),
+                    'name': event.name,
+                    'bio': event.bio,
+                    'max_participants': event.maxParticipants,
+                    'website': event.website,
+                    'email': event.email,
+                    'phone_number': event.phoneNumber,
+                    'address': event.address,
+                    'program': json.loads(event.program) if event.program else [],
+                    'images_paths': json.loads(event.imagesPaths) if event.imagesPaths else [],
+                    'date': event.date
+                }
+                events.append(converted_event)
+        
         return {"events": events}
     except HTTPException:
         raise
@@ -286,13 +327,33 @@ async def get_event(place_id: int, event_id: str):
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
         
-        events = getattr(place, 'events', []) or []
-        event = next((e for e in events if e.get('id') == event_id), None)
+        # Find the event in the place's events
+        event = None
+        if hasattr(place, 'events') and place.events:
+            for e in place.events:
+                if str(e.id) == event_id:
+                    event = e
+                    break
         
         if not event:
             raise HTTPException(status_code=404, detail="Event not found")
         
-        return {"event": event}
+        # Convert event to match frontend expectations
+        converted_event = {
+            'id': str(event.id),
+            'name': event.name,
+            'bio': event.bio,
+            'max_participants': event.maxParticipants,
+            'website': event.website,
+            'email': event.email,
+            'phone_number': event.phoneNumber,
+            'address': event.address,
+            'program': json.loads(event.program) if event.program else [],
+            'images_paths': json.loads(event.imagesPaths) if event.imagesPaths else [],
+            'date': event.date
+        }
+        
+        return {"event": converted_event}
     except HTTPException:
         raise
     except Exception as e:
@@ -306,33 +367,68 @@ async def update_event(place_id: int, event_id: str, updated_event: UpdateEvent)
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
         
-        events = getattr(place, 'events', []) or []
-        event_index = next((i for i, e in enumerate(events) if e.get('id') == event_id), None)
+        # Check if event exists
+        event_exists = False
+        if hasattr(place, 'events') and place.events:
+            for e in place.events:
+                if str(e.id) == event_id:
+                    event_exists = True
+                    break
         
-        if event_index is None:
+        if not event_exists:
             raise HTTPException(status_code=404, detail="Event not found")
         
-        # Update the event - convert snake_case to camelCase for database consistency
-        updated_data = updated_event.model_dump(exclude_unset=True)
+        # Update the event using Prisma
+        from prisma import Prisma
+        prisma = Prisma()
+        await prisma.connect()
         
-        # Convert field names to match database schema
-        converted_data = {}
-        for key, value in updated_data.items():
-            if key == 'max_participants':
-                converted_data['maxParticipants'] = value
-            elif key == 'phone_number':
-                converted_data['phoneNumber'] = value
-            elif key == 'images_paths':
-                converted_data['imagesPaths'] = value
-            else:
-                converted_data[key] = value
-        
-        events[event_index].update(converted_data)
-        
-        # Update the place with the modified events
-        updated_place = await db_service.update_place(place_id, {"events": events})
-        
-        return {"status": "success", "event": events[event_index], "place": updated_place}
+        try:
+            # Convert field names to match database schema
+            updated_data = updated_event.model_dump(exclude_unset=True)
+            converted_data = {}
+            
+            for key, value in updated_data.items():
+                if key == 'max_participants':
+                    converted_data['maxParticipants'] = value
+                elif key == 'phone_number':
+                    converted_data['phoneNumber'] = value
+                elif key == 'images_paths':
+                    converted_data['imagesPaths'] = json.dumps(value) if value else None
+                elif key == 'program':
+                    converted_data['program'] = json.dumps(value) if value else None
+                else:
+                    converted_data[key] = value
+            
+            # Update the event in the database
+            updated_event_db = await prisma.event.update(
+                where={'id': int(event_id)},
+                data=converted_data
+            )
+            
+            # Convert the updated event to match frontend expectations
+            converted_event = {
+                'id': str(updated_event_db.id),
+                'name': updated_event_db.name,
+                'bio': updated_event_db.bio,
+                'max_participants': updated_event_db.maxParticipants,
+                'website': updated_event_db.website,
+                'email': updated_event_db.email,
+                'phone_number': updated_event_db.phoneNumber,
+                'address': updated_event_db.address,
+                'program': json.loads(updated_event_db.program) if updated_event_db.program else [],
+                'images_paths': json.loads(updated_event_db.imagesPaths) if updated_event_db.imagesPaths else [],
+                'date': updated_event_db.date
+            }
+            
+            # Get updated place with events
+            updated_place = await db_service.get_place_by_id(place_id)
+            
+            return {"status": "success", "event": converted_event, "place": updated_place}
+            
+        finally:
+            await prisma.disconnect()
+            
     except HTTPException:
         raise
     except Exception as e:
@@ -346,19 +442,51 @@ async def delete_event(place_id: int, event_id: str):
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
         
-        events = getattr(place, 'events', []) or []
-        event_index = next((i for i, e in enumerate(events) if e.get('id') == event_id), None)
+        # Find the event to delete
+        event_to_delete = None
+        if hasattr(place, 'events') and place.events:
+            for e in place.events:
+                if str(e.id) == event_id:
+                    event_to_delete = e
+                    break
         
-        if event_index is None:
+        if not event_to_delete:
             raise HTTPException(status_code=404, detail="Event not found")
         
-        # Remove the event
-        deleted_event = events.pop(event_index)
+        # Delete the event using Prisma
+        from prisma import Prisma
+        prisma = Prisma()
+        await prisma.connect()
         
-        # Update the place with the modified events
-        updated_place = await db_service.update_place(place_id, {"events": events})
-        
-        return {"status": "success", "deleted_event": deleted_event, "place": updated_place}
+        try:
+            # Delete the event from the database
+            await prisma.event.delete(
+                where={'id': int(event_id)}
+            )
+            
+            # Convert the deleted event to match frontend expectations
+            deleted_event = {
+                'id': str(event_to_delete.id),
+                'name': event_to_delete.name,
+                'bio': event_to_delete.bio,
+                'max_participants': event_to_delete.maxParticipants,
+                'website': event_to_delete.website,
+                'email': event_to_delete.email,
+                'phone_number': event_to_delete.phoneNumber,
+                'address': event_to_delete.address,
+                'program': json.loads(event_to_delete.program) if event_to_delete.program else [],
+                'images_paths': json.loads(event_to_delete.imagesPaths) if event_to_delete.imagesPaths else [],
+                'date': event_to_delete.date
+            }
+            
+            # Get updated place with events
+            updated_place = await db_service.get_place_by_id(place_id)
+            
+            return {"status": "success", "deleted_event": deleted_event, "place": updated_place}
+            
+        finally:
+            await prisma.disconnect()
+            
     except HTTPException:
         raise
     except Exception as e:

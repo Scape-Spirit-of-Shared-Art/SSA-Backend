@@ -63,7 +63,8 @@ class DatabaseService:
                             'phoneNumber': event.get('phone_number'),
                             'address': event.get('address'),
                             'program': json.dumps(event.get('program', [])),
-                            'imagesPaths': json.dumps(event.get('images_paths', []))
+                            'imagesPaths': json.dumps(event.get('images_paths', [])),
+                            'date': event.get('date')
                         }
                         for event in events_data
                     ]

@@ -22,6 +22,7 @@ model Event {
   address         String
   program         String   // JSON string for scheduled activities
   imagesPaths     String   @map("images_paths") // JSON string for image paths
+  date            String?  // Optional date field for the event
   placeId         Int
   place           Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
   
