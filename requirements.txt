@@ -2,7 +2,7 @@
 # Core backend dependencies
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.5.0
+pydantic>=2.7.4
 python-multipart==0.0.6
 
 # Agent AI dependencies
@@ -30,6 +30,11 @@ flake8>=6.0.0
 
 # CORS support (inclus în FastAPI, dar specificat pentru claritate)
 # fastapi.middleware.cors.CORSMiddleware
+
+# Database dependencies
+prisma>=0.13.0
+asyncpg>=0.29.0  # PostgreSQL async driver
+python-dotenv>=1.0.0  # For environment variables
 
 # Instrucțiuni de instalare:
 # pip install -r requirements.txt

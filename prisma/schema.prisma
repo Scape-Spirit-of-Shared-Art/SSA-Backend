@@ -1,0 +1,53 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-py"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// Event model
+model Event {
+  id              Int      @id @default(autoincrement())
+  name            String
+  bio             String
+  maxParticipants Int      @map("max_participants")
+  website         String
+  email           String
+  phoneNumber     String   @map("phone_number")
+  address         String
+  program         String   // JSON string for scheduled activities
+  imagesPaths     String   @map("images_paths") // JSON string for image paths
+  placeId         Int
+  place           Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
+  
+  @@map("events")
+}
+
+// Place model
+model Place {
+  id             Int      @id @default(autoincrement())
+  name           String
+  bio            String
+  website        String
+  email          String
+  phoneNumber    String   @map("phone_number")
+  address        String
+  floormaps      String   // JSON string for floor map data
+  password       String
+  mondayFriday   String   @map("monday_friday")
+  saturday       String
+  sunday         String
+  imagePath      String   @map("image_path")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  events         Event[]
+  
+  @@map("places")
+}
