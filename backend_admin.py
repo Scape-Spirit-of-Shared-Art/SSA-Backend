@@ -1,20 +1,265 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, validator
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from pathlib import Path
 import json
 import uuid
 import os
+import sys
+import cv2
+import numpy as np
+import time
+import threading
+import asyncio
+import platform
+from contextlib import asynccontextmanager
 from database_service import db_service
 
-app = FastAPI(title="SSA Backend Admin API", version="1.0.0")
+# Add backend directory to path for imports
+sys.path.append(os.path.join(os.path.dirname(__file__), 'backend'))
+
+# Import backend routes
+from backend.routes.reservations import router as reservations_router
+from backend.routes.event_ticket import router as event_ticket_router
+
+# Camera Detection System
+class PeopleDetectionStream:
+    def __init__(self, camera_source=0):
+        try:
+            from ultralytics import YOLO
+            self.model = YOLO('yolov8m-seg.pt')
+        except ImportError:
+            print("Warning: ultralytics not available. Camera detection will be disabled.")
+            self.model = None
+        
+        self.camera_source = camera_source
+        self.cap = None
+        self.people_count = 0
+        self.last_frame = None
+        self.last_processed_frame = None
+        self.is_running = False
+        self.lock = threading.Lock()
+        
+        # Overlay color and transparency
+        self.color = (0, 255, 0)  # BGR: Green
+        self.alpha = 0.6
+    
+    def get_camera_backend(self):
+        """Get the appropriate camera backend for the current platform"""
+        if platform.system() == 'Darwin':  # macOS
+            return cv2.CAP_AVFOUNDATION
+        else:  # Windows/Linux
+            return cv2.CAP_DSHOW
+        
+    def list_available_cameras(self):
+        """List all available cameras, prioritizing USB cameras"""
+        available_cameras = []
+        usb_cameras = []
+        print("\n🔍 Căutare camere USB...")
+        
+        # Check indices 1-10 for USB cameras first
+        backend = self.get_camera_backend()
+        for i in range(1, 10):
+            cap = cv2.VideoCapture(i, backend)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret:
+                    available_cameras.append(i)
+                    usb_cameras.append(i)
+                    print(f"✅ Camera USB găsită la indexul {i}")
+                cap.release()
+        
+        # Only check built-in camera (0) if no USB cameras found
+        if not usb_cameras:
+            print("⚠️  Nicio cameră USB găsită, verific camera integrată...")
+            cap = cv2.VideoCapture(0, backend)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret:
+                    available_cameras.append(0)
+                    print(f"ℹ️  Camera integrată găsită la indexul 0")
+                cap.release()
+        
+        if not available_cameras:
+            print("❌ Nicio cameră găsită")
+        else:
+            if usb_cameras:
+                print(f"\n📹 Camere USB disponibile: {usb_cameras}")
+        
+        return available_cameras
+    
+    def initialize_camera(self):
+        """Initialize the camera"""
+        if self.model is None:
+            print("❌ YOLO model not available. Camera detection disabled.")
+            return False
+            
+        # List available cameras first
+        available_cameras = self.list_available_cameras()
+        
+        if not available_cameras:
+            print("\n⚠️  Nu am găsit nicio cameră USB.")
+            print("💡 Asigură-te că:")
+            print("   - Camera USB este conectată")
+            print("   - Driverele sunt instalate")
+            print("   - Camera nu este folosită de altă aplicație")
+            return False
+        
+        # Try to open the specified camera first
+        print(f"\n🎥 Încerc să deschid camera USB {self.camera_source}...")
+        backend = self.get_camera_backend()
+        self.cap = cv2.VideoCapture(self.camera_source, backend)
+        
+        if not self.cap.isOpened():
+            # Try the first available camera as fallback
+            print(f"⚠️  Camera USB {self.camera_source} nu este disponibilă.")
+            print(f"🔄 Încerc prima cameră disponibilă: {available_cameras[0]}")
+            self.camera_source = available_cameras[0]
+            self.cap = cv2.VideoCapture(self.camera_source, backend)
+        
+        if self.cap.isOpened():
+            # Configure camera settings
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self.cap.set(cv2.CAP_PROP_FPS, 60)
+            self.is_running = True
+            print(f"✅ Camera {self.camera_source} deschisă cu succes!")
+            
+            # Print actual camera properties
+            actual_width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            actual_height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
+            print(f"📹 Rezoluție: {int(actual_width)}x{int(actual_height)} @ {int(actual_fps)} FPS")
+            return True
+        
+        print("❌ Nu am putut deschide nicio cameră")
+        return False
+    
+    def color_exact_people(self, frame, results):
+        """Color detected people using segmentation masks"""
+        people_count = 0
+        
+        for result in results:
+            if getattr(result, 'masks', None) is not None:
+                masks = result.masks
+                boxes = result.boxes
+
+                for i, (box, mask) in enumerate(zip(boxes, masks)):
+                    confidence = float(box.conf[0].cpu().numpy())
+
+                    if confidence > 0.5:
+                        people_count += 1
+
+                        # Mask data (float [0..1]) -> resize to frame size
+                        mask_data = mask.data[0].cpu().numpy()
+                        mask_resized = cv2.resize(mask_data, (frame.shape[1], frame.shape[0]))
+
+                        # Binary mask 0 or 255 (uint8) for OpenCV operations
+                        mask_binary = (mask_resized > 0.5).astype(np.uint8) * 255
+
+                        # Create 3-channel mask for broadcasting
+                        mask_3c = cv2.merge([mask_binary, mask_binary, mask_binary])
+
+                        # Red overlay image
+                        red_overlay = np.zeros_like(frame, dtype=np.uint8)
+                        red_overlay[:] = self.color
+
+                        # Alpha blend the red overlay with the original frame
+                        blended = cv2.addWeighted(frame, 1.0 - self.alpha, red_overlay, self.alpha, 0)
+
+                        # Replace masked pixels with blended pixels
+                        frame = np.where(mask_3c == 255, blended, frame).astype(np.uint8)
+        
+        return frame, people_count
+    
+    def process_frame(self, frame):
+        """Process frame with YOLO and return processed frame"""
+        if self.model is None:
+            return frame, 0
+            
+        results = self.model(
+            frame,
+            classes=[0],      # Only detect people
+            conf=0.4,         # Confidence threshold
+            iou=0.5,          # IoU threshold
+            imgsz=416,        # Image size
+            half=False,       # Full precision
+            max_det=20,       # Max detections
+            vid_stride=1,     # Process all frames
+            stream=False,
+            device='cpu',     # Change to 'cuda' if GPU available
+            verbose=False
+        )
+        
+        # Apply segmentation coloring
+        processed_frame, people_count = self.color_exact_people(frame.copy(), results)
+        
+        # Add overlay information
+        current_time = time.strftime("%H:%M:%S")
+        cv2.putText(processed_frame, f'PEOPLE: {people_count}', 
+                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        cv2.putText(processed_frame, f'TIME: {current_time}', 
+                   (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        
+        # Alert for high density
+        if people_count > 15:
+            cv2.putText(processed_frame, 'HIGH DENSITY!', 
+                       (150, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        
+        return processed_frame, people_count
+    
+    def get_frame(self):
+        """Read a frame from the camera"""
+        if self.cap is None or not self.cap.isOpened():
+            return None, None
+        
+        ret, frame = self.cap.read()
+        if not ret:
+            return None, None
+        
+        return frame, frame.copy()
+    
+    def release(self):
+        """Release camera resources"""
+        self.is_running = False
+        if self.cap is not None:
+            self.cap.release()
+
+# Global camera detector instance
+CAMERA_INDEX = int(os.getenv('CAMERA_INDEX', '0'))
+detector = PeopleDetectionStream(camera_source=CAMERA_INDEX)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize database connection and camera on startup and cleanup on shutdown"""
+    # Startup
+    await db_service.connect()
+    
+    # Initialize camera
+    print("\n" + "="*60)
+    print("🚀 SSA Backend Admin API - Starting...")
+    print("="*60)
+    if detector.initialize_camera():
+        print("✅ Camera system ready!")
+    else:
+        print("⚠️  Camera system not available (ultralytics not installed or no camera found)")
+    print("="*60 + "\n")
+    
+    yield
+    
+    # Shutdown
+    detector.release()
+    await db_service.disconnect()
+
+app = FastAPI(title="SSA Backend Admin API", version="1.0.0", lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200", "http://127.0.0.1:4200"],  # Angular dev server
+    allow_origins=["http://localhost:4200", "http://127.0.0.1:4200", "http://localhost:4201", "http://127.0.0.1:4201"],  # Angular dev server
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -26,6 +271,10 @@ Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
 # Mount static files to serve uploaded images
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+# Include backend routers
+app.include_router(reservations_router)
+app.include_router(event_ticket_router)
 
 # Valid categories for places
 VALID_CATEGORIES = ["REFINED_SIDE", "FUN_SIDE", "SPORT_SPHERE", "CITY_TREASURES"]
@@ -57,7 +306,8 @@ class Place(BaseModel):
     events: List[Event] = Field(description="List of events at the place")
     image_path: str = Field(description="Path to the image file for the place")
     
-    @validator('categories')
+    @field_validator('categories')
+    @classmethod
     def validate_categories(cls, v):
         if not v:
             raise ValueError('Categories list cannot be empty')
@@ -83,7 +333,8 @@ class UpdatePlace(BaseModel):
     events: Optional[List[Event]] = Field(description="List of events at the place")
     image_path: Optional[str] = Field(description="Path to the image file for the place")
     
-    @validator('categories')
+    @field_validator('categories')
+    @classmethod
     def validate_categories(cls, v):
         if v is not None:
             if not v:
@@ -94,20 +345,56 @@ class UpdatePlace(BaseModel):
         return v
     
 
-# Startup and shutdown events
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database connection on startup"""
-    await db_service.connect()
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Close database connection on shutdown"""
-    await db_service.disconnect()
+# Database connection is now handled by the lifespan context manager
 
 @app.get("/")
 def read_root():
-    return {"message": "SSA Backend Admin API", "docs": "/docs"}
+    return {
+        "message": "SSA Backend Admin API", 
+        "docs": "/docs",
+        "description": "API for SSA cultural reservation system - places, events, and reservations",
+        "endpoints": {
+            "admin": {
+                "GET /places": "Get all places",
+                "POST /new_place": "Create a new place",
+                "GET /places/{place_id}": "Get place by ID",
+                "PUT /edit_place/{place_id}": "Update place",
+                "DELETE /delete_place/{place_id}": "Delete place",
+                "POST /upload-image": "Upload image file",
+                "GET /categories": "Get valid categories"
+            },
+            "events": {
+                "POST /places/{place_id}/events": "Create event for place",
+                "GET /places/{place_id}/events": "Get events for place",
+                "GET /places/{place_id}/events/{event_id}": "Get specific event",
+                "PUT /places/{place_id}/events/{event_id}": "Update event",
+                "DELETE /places/{place_id}/events/{event_id}": "Delete event"
+            },
+            "reservations": {
+                "POST /reservations/start": "Start new reservation",
+                "GET /reservations/{session_id}/status": "Check reservation status",
+                "DELETE /reservations/{session_id}": "Delete reservation session",
+                "GET /reservations/": "Get all active sessions"
+            },
+            "event_tickets": {
+                "POST /event/start": "Start event ticket booking",
+                "GET /event/{session_id}/status": "Check booking status",
+                "GET /event/": "Get all booking sessions"
+            },
+            "camera": {
+                "GET /camera/raw": "Stream raw camera feed",
+                "GET /camera/processed": "Stream processed camera feed with people detection",
+                "GET /camera/people_count": "Get current people count"
+            }
+        }
+    }
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint
+    """
+    return {"status": "healthy", "message": "SSA Backend Admin API is running"}
 
 @app.get("/categories")
 def get_valid_categories():
@@ -153,7 +440,67 @@ async def get_list_of_places():
     """Get all places"""
     try:
         places = await db_service.get_all_places()
-        return {"places": places}
+        print(f"DEBUG: Found {len(places)} places")
+        
+        # Convert places to match frontend expectations
+        converted_places = []
+        for place in places:
+            print(f"DEBUG: Place {place.id} has {len(place.events) if place.events else 0} events")
+            
+            # Convert events for this place
+            converted_events = []
+            if place.events:
+                for event in place.events:
+                    print(f"DEBUG: Event {event.id} imagesPaths raw: {event.imagesPaths}")
+                    
+                    # Parse images_paths
+                    try:
+                        if event.imagesPaths:
+                            parsed_images = json.loads(event.imagesPaths)
+                            print(f"DEBUG: Event {event.id} parsed images: {parsed_images}")
+                        else:
+                            parsed_images = []
+                            print(f"DEBUG: Event {event.id} no imagesPaths, using empty array")
+                    except Exception as e:
+                        print(f"DEBUG: Event {event.id} JSON parse error: {e}")
+                        parsed_images = []
+                    
+                    converted_event = {
+                        'id': str(event.id),
+                        'name': event.name,
+                        'bio': event.bio,
+                        'max_participants': event.maxParticipants,
+                        'website': event.website,
+                        'email': event.email,
+                        'phone_number': event.phoneNumber,
+                        'address': event.address,
+                        'program': json.loads(event.program) if event.program else [],
+                        'images_paths': parsed_images,
+                        'date': event.date
+                    }
+                    converted_events.append(converted_event)
+            
+            # Create converted place
+            converted_place = {
+                'id': place.id,
+                'name': place.name,
+                'bio': place.bio,
+                'website': place.website,
+                'email': place.email,
+                'phone_number': place.phoneNumber,
+                'address': place.address,
+                'floormaps': json.loads(place.floormaps) if place.floormaps else {},
+                'categories': json.loads(place.categories) if place.categories else [],
+                'password': place.password,
+                'monday_friday': place.mondayFriday,
+                'saturday': place.saturday,
+                'sunday': place.sunday,
+                'image_path': place.imagePath,
+                'events': converted_events
+            }
+            converted_places.append(converted_place)
+        
+        return {"places": converted_places}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching places: {str(e)}")
 
@@ -298,6 +645,21 @@ async def get_place_events(place_id: int):
         events = []
         if hasattr(place, 'events') and place.events:
             for event in place.events:
+                print(f"DEBUG: Event {event.id} - imagesPaths raw: {event.imagesPaths}")
+                print(f"DEBUG: Event {event.id} - imagesPaths type: {type(event.imagesPaths)}")
+                
+                # Try to parse images_paths
+                try:
+                    if event.imagesPaths:
+                        parsed_images = json.loads(event.imagesPaths)
+                        print(f"DEBUG: Event {event.id} - parsed images successfully: {parsed_images}")
+                    else:
+                        parsed_images = []
+                        print(f"DEBUG: Event {event.id} - no imagesPaths, using empty array")
+                except Exception as e:
+                    print(f"DEBUG: Event {event.id} - JSON parse error: {e}")
+                    parsed_images = []
+                
                 converted_event = {
                     'id': str(event.id),
                     'name': event.name,
@@ -308,9 +670,10 @@ async def get_place_events(place_id: int):
                     'phone_number': event.phoneNumber,
                     'address': event.address,
                     'program': json.loads(event.program) if event.program else [],
-                    'images_paths': json.loads(event.imagesPaths) if event.imagesPaths else [],
+                    'images_paths': parsed_images,
                     'date': event.date
                 }
+                print(f"DEBUG: Event {event.id} - final converted images_paths: {converted_event['images_paths']}")
                 events.append(converted_event)
         
         return {"events": events}
@@ -491,5 +854,74 @@ async def delete_event(place_id: int, event_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting event: {str(e)}")
+
+# Camera Streaming Functions
+async def generate_raw_frames():
+    """Generate raw camera frames"""
+    while True:
+        frame, _ = detector.get_frame()
+        if frame is None:
+            await asyncio.sleep(0.016)  # ~60 FPS
+            continue
         
+        # Encode frame to JPEG
+        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ret:
+            continue
+        
+        frame_bytes = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        
+        await asyncio.sleep(0.016)  # ~60 FPS
+
+async def generate_processed_frames():
+    """Generate processed frames with people detection"""
+    while True:
+        frame, _ = detector.get_frame()
+        if frame is None:
+            await asyncio.sleep(0.016)  # ~60 FPS
+            continue
+        
+        # Process frame with YOLO
+        processed_frame, people_count = detector.process_frame(frame)
+        
+        # Update global count
+        with detector.lock:
+            detector.people_count = people_count
+            detector.last_processed_frame = processed_frame
+        
+        # Encode frame to JPEG
+        ret, buffer = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ret:
+            continue
+        
+        frame_bytes = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        
+        await asyncio.sleep(0.016)  # ~60 FPS
+
+# Camera Endpoints
+@app.get('/camera/raw')
+async def camera_raw():
+    """Stream raw camera feed"""
+    return StreamingResponse(
+        generate_raw_frames(),
+        media_type='multipart/x-mixed-replace; boundary=frame'
+    )
+
+@app.get('/camera/processed')
+async def camera_processed():
+    """Stream processed camera feed with detections"""
+    return StreamingResponse(
+        generate_processed_frames(),
+        media_type='multipart/x-mixed-replace; boundary=frame'
+    )
+
+@app.get('/camera/people_count')
+async def get_people_count():
+    """Get current people count"""
+    with detector.lock:
+        return {"count": detector.people_count}
 

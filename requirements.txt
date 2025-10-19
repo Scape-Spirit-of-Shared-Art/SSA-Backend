@@ -40,6 +40,12 @@ python-dotenv>=1.0.0  # For environment variables
 # CORS support (inclus în FastAPI, dar specificat pentru claritate)
 # fastapi.middleware.cors.CORSMiddleware
 
+# Camera detection dependencies
+opencv-python>=4.8.0
+ultralytics>=8.0.0
+numpy>=1.24.0
+Pillow>=9.0.0
+
 # Instrucțiuni de instalare:
 # pip install -r requirements.txt
 # sau pentru development:
