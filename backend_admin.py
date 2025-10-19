@@ -505,7 +505,7 @@ async def get_list_of_places():
             }
             
             # Separate "Filarmonica Oltenia" from other places
-            if place.name.lower() == "filarmonica oltenia":
+            if place.name.lower() == "teatrul național marin sorescu":
                 filarmonica_oltenia = converted_place
             else:
                 other_places.append(converted_place)
