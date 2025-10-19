@@ -1,6 +1,7 @@
 import asyncio
 import time
 import uuid
+import os
 from browser_use import Agent, Browser, ChatAnthropic, Tools
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional
@@ -21,9 +22,27 @@ class EventTicketService:
     async def initialize_browser(self):
         """Initialize browser"""
         if self.browser is None:
+            # Try different Chrome paths for different operating systems
+            chrome_paths = [
+                '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',  # macOS
+                '/usr/bin/google-chrome-stable',  # Linux
+                '/usr/bin/google-chrome',  # Linux alternative
+                'google-chrome',  # PATH
+                'chrome'  # PATH alternative
+            ]
+            
+            executable_path = None
+            for path in chrome_paths:
+                if os.path.exists(path) or path in ['google-chrome', 'chrome']:
+                    executable_path = path
+                    break
+            
+            if not executable_path:
+                raise Exception("Chrome browser not found. Please install Google Chrome.")
+            
             self.browser = Browser(
-                    headless=False,
-                    executable_path='/usr/bin/google-chrome-stable',
+                    headless=False,  # Show browser window for user interaction
+                    executable_path=executable_path,
                     window_size={'width': 1080, 'height': 2400}
             )
             await self.browser.start()
