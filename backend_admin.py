@@ -444,6 +444,11 @@ async def get_list_of_places():
         
         # Convert places to match frontend expectations
         converted_places = []
+        
+        # Hardcode "Filarmonica Oltenia" to appear as 3rd place
+        filarmonica_oltenia = None
+        other_places = []
+        
         for place in places:
             print(f"DEBUG: Place {place.id} has {len(place.events) if place.events else 0} events")
             
@@ -495,10 +500,28 @@ async def get_list_of_places():
                 'monday_friday': place.mondayFriday,
                 'saturday': place.saturday,
                 'sunday': place.sunday,
-                'image_path': place.imagePath,
+                'imagePath': place.imagePath,  # Changed from image_path to imagePath to match frontend interface
                 'events': converted_events
             }
-            converted_places.append(converted_place)
+            
+            # Separate "Filarmonica Oltenia" from other places
+            if place.name.lower() == "filarmonica oltenia":
+                filarmonica_oltenia = converted_place
+            else:
+                other_places.append(converted_place)
+        
+        # Reorder places: first 2 other places, then Filarmonica Oltenia, then the rest
+        if filarmonica_oltenia:
+            # Take first 2 other places
+            first_two = other_places[:2]
+            # Add Filarmonica Oltenia as 3rd
+            converted_places.extend(first_two)
+            converted_places.append(filarmonica_oltenia)
+            # Add the rest
+            converted_places.extend(other_places[2:])
+        else:
+            # If Filarmonica Oltenia not found, return all places as normal
+            converted_places = other_places
         
         return {"places": converted_places}
     except Exception as e:
